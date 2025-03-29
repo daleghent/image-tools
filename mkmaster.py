@@ -1,23 +1,29 @@
 #!/bin/env python3
 
-import numpy as np
 import os
 import sys
+import warnings
+import numpy as np
 from astropy.io import fits
 from astropy.nddata import CCDData
 from astropy.stats import sigma_clip
 from astropy.stats import sigma_clipped_stats
 from astropy.stats import mad_std
+from astropy.wcs import FITSFixedWarning
 from ccdproc import combine
+
+warnings.filterwarnings('ignore', category=FITSFixedWarning, append=True)
 
 def create_master_frame(files, output_filename):
     """Combine FITS files into a master frame using median stacking."""
     header = None
+    ccd_list = []
 
     for file in files:
-        ccd_list = []
+        print(f"Reading in {file}")
         try:
             ccd = CCDData.read(file, unit='adu')
+            print(f"  Mean: {np.mean(ccd.data):.2f}, Min: {np.min(ccd.data)}, Max: {np.max(ccd.data)}\n")
             ccd_list.append(ccd)
         except Exception as e:
             print(f"Error reading {file}: {e}")
@@ -26,12 +32,18 @@ def create_master_frame(files, output_filename):
             print("No valid FITS files could be read.")
             return
 
+    print(f"{len(ccd_list)} files read.")
+
     master_frame = combine(ccd_list, method='average', dtype=np.float32,
-            sigma_clip=True, sigma_clip_low_thresh=3, sigma_clip_high_thresh=3,
+            sigma_clip=True, sigma_clip_low_thresh=5, sigma_clip_high_thresh=5,
             sigma_clip_func=np.ma.median, signma_clip_dev_func=mad_std)
 
+    master_frame.meta['combined'] = True
+
     master_frame.write(output_filename, overwrite=True, hdu_mask=None, hdu_uncertainty=None)
+
     print(f"Master frame created: {output_filename}")
+    print(f"Mean: {np.mean(master_frame.data):.2f}, Min: {np.min(master_frame.data):.2f}, Max: {np.max(master_frame.data):.2f}")
 
 def organize_files_by_type(directory):
     """Organize files in a directory by their IMAGETYP keyword."""
