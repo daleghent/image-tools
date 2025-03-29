@@ -101,11 +101,7 @@ def main():
 
     # Combine the calibrated flats with sigma clipping
     print("Combining calibrated flats into a master flat...")
-    master_flat = combine(
-        calibrated_flats,
-        method="average",
-        dtype=np.float32
-    )
+    master_flat = combine(calibrated_flats, method="average", dtype=np.float32)
 
     # Create the master flat filename
     master_flat_name = f"masterFLAT_{filter_name}_{binning_level}.fits"
@@ -115,7 +111,7 @@ def main():
     master_flat.header["IMAGETYP"] = "masterFLAT"
 
     # Save the master flat
-    master_flat.write(master_flat_path, overwrite=True)
+    master_flat.write(master_flat_path, overwrite=True, hdu_mask=None, hdu_uncertainty=None)
     print(f"Master flat saved to {master_flat_path}")
 
 if __name__ == "__main__":
