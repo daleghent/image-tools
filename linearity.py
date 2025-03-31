@@ -114,13 +114,15 @@ def calculate_r_squared(y_actual, y_predicted):
 
 def plot_and_save_graph(exposure_times, mean_values, unsat_exptimes, unsat_means,
                         metadata, output_dir):
+    date = datetime.now()
+
     camera = metadata.get('camera', 'Unknown_Camera')
     gain = metadata.get('gain', 'N/A')
     offset = metadata.get('offset', 'N/A')
     readout = metadata.get('readout', 'Default')
     ccd_temp = metadata.get('ccd-temp', 'N/A')
     swcreate = metadata.get('swcreate', 'N/A')
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = date.strftime("%Y-%m-%d %H:%M:%S")
 
     # Least-squares linear fit
     coeffs = np.polyfit(unsat_exptimes, unsat_means, 1)
@@ -173,7 +175,7 @@ def plot_and_save_graph(exposure_times, mean_values, unsat_exptimes, unsat_means
     # Save plot
     camera_safe = camera.replace(" ", "_").replace("/", "")
     readout_safe = readout.replace(" ", "_").replace("/", "")
-    iso_timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    iso_timestamp = date.strftime("%Y%m%dT%H%M%S")
     output_filename = f"{camera_safe}_G{gain}_O{offset}_{readout_safe}_Sensor_Linearity_{iso_timestamp}.png"
     output_path = os.path.join(output_dir, output_filename)
 
