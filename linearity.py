@@ -63,7 +63,7 @@ def process_fits_directory(directory, saturation, min_exp=None, max_exp=None):
     saturation_count = 0
 
     for filename in os.listdir(directory):
-        if filename.lower().endswith((".fits", ".fit")):
+        if filename.lower().endswith((".fits", ".fit", ".fts", ".fz")):
             filepath = os.path.join(directory, filename)
             result = get_fits_metadata(filepath)
             if result:
