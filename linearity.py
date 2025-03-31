@@ -23,10 +23,14 @@
 # SOFTWARE.
 
 import os
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
 from astropy.io import fits
 from datetime import datetime
+
+default_saturation_point = 65000
+default_output_dir = '.'
 
 def get_fits_metadata(file_path):
     with fits.open(file_path) as hdul:
@@ -188,8 +192,10 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Generate and save linearity plot from FITS files with exposure time filtering.")
     parser.add_argument("directory", help="Directory containing FITS files.")
+    parser.add_argument("-o", "--output-dir", default='.',
+                        help=f"Sets output directory for graph file (default: {default_output_dir})")
     parser.add_argument("-s", "--saturation", type=float, default=65000,
-                        help="Saturation point: max mean ADU to include in linear fit (default: 65000)")
+                        help=f"Saturation point: the maximum mean ADU to include in linear fit (default: {default_saturation_point})")
 
     parser.add_argument("--min-exp", type=float, default=None,
                         help="Minimum exposure time to include in the fit")
@@ -198,6 +204,10 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    if not os.path.isdir(args.output_dir):
+        print(f"Error: Output directory {args.output_dir} does not exist!")
+        sys.exit(2)
+
     (exposure_times, mean_values,
      unsat_exptimes, unsat_means,
      metadata,
@@ -205,7 +215,7 @@ if __name__ == "__main__":
 
     if exposure_times.size > 0 and mean_values.size > 0 and metadata:
         plot_and_save_graph(exposure_times, mean_values, unsat_exptimes,
-                            unsat_means, metadata, args.directory)
+                            unsat_means, metadata, args.output_dir)
     else:
         print("No valid FITS files with required metadata found.")
 
