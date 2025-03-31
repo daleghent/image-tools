@@ -52,7 +52,7 @@ def get_fits_metadata(file_path):
 
 from collections import defaultdict
 
-def process_fits_directory(directory, adu_limit, min_exp=None, max_exp=None):
+def process_fits_directory(directory, saturation, min_exp=None, max_exp=None):
     exposure_times = []  # All exposure times (not averaged)
     
     grouped_means = defaultdict(list)  # exposure time -> list of mean values
@@ -78,7 +78,7 @@ def process_fits_directory(directory, adu_limit, min_exp=None, max_exp=None):
                 if result['saturated']:
                     saturation_count += 1
 
-                if result['mean'] <= adu_limit:
+                if result['mean'] <= saturation:
                     unsat_grouped_means[exp_time].append(result['mean'])
 
                 if metadata_sample is None:
@@ -165,7 +165,7 @@ def plot_and_save_graph(exposure_times, mean_values, unsat_exptimes, unsat_means
 
     # Footer with timestamp and software
     plt.figtext(0.5, 0.01,
-                f"Fit cutoff: {args.adu_limit} ADU | Created at {timestamp} | Imaging Software: {swcreate} | linearity.py by Dale Ghent",
+                f"Saturation: {args.saturation} ADU | Created at {timestamp} | Imaging Software: {swcreate} | linearity.py by Dale Ghent",
                 wrap=True, horizontalalignment='center', fontsize=6, style='italic')
 
     plt.tight_layout()
@@ -186,8 +186,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Generate and save linearity plot from FITS files with exposure time filtering.")
     parser.add_argument("directory", help="Directory containing FITS files.")
-    parser.add_argument("-a", "--adu-limit", type=float, default=65000,
-                        help="Max mean ADU value to include in linear fit (default: 65000)")
+    parser.add_argument("-s", "--saturation", type=float, default=65000,
+                        help="Saturation point: max mean ADU to include in linear fit (default: 65000)")
 
     parser.add_argument("--min-exp", type=float, default=None,
                         help="Minimum exposure time to include in the fit")
@@ -199,7 +199,7 @@ if __name__ == "__main__":
     (exposure_times, mean_values,
      unsat_exptimes, unsat_means,
      metadata,
-     saturation_count) = process_fits_directory(args.directory, args.adu_limit, args.min_exp, args.max_exp)
+     saturation_count) = process_fits_directory(args.directory, args.saturation, args.min_exp, args.max_exp)
 
     if exposure_times.size > 0 and mean_values.size > 0 and metadata:
         plot_and_save_graph(exposure_times, mean_values, unsat_exptimes,
