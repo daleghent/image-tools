@@ -117,7 +117,7 @@ def plot_and_save_graph(exposure_times, mean_values, unsat_exptimes, unsat_means
     camera = metadata.get('camera', 'Unknown_Camera')
     gain = metadata.get('gain', 'N/A')
     offset = metadata.get('offset', 'N/A')
-    readout = metadata.get('readout', 'N/A')
+    readout = metadata.get('readout', 'Default')
     ccd_temp = metadata.get('ccd-temp', 'N/A')
     swcreate = metadata.get('swcreate', 'N/A')
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -171,8 +171,8 @@ def plot_and_save_graph(exposure_times, mean_values, unsat_exptimes, unsat_means
     plt.tight_layout()
 
     # Save plot
-    camera_safe = camera.replace(" ", "_").replace("/", "_")
-    readout_safe = readout.replace(" ", "_").replace("/", "_")
+    camera_safe = camera.replace(" ", "_").replace("/", "")
+    readout_safe = readout.replace(" ", "_").replace("/", "")
     iso_timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     output_filename = f"{camera_safe}_G{gain}_O{offset}_{readout_safe}_Sensor_Linearity_{iso_timestamp}.png"
     output_path = os.path.join(output_dir, output_filename)
