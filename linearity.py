@@ -194,7 +194,7 @@ if __name__ == "__main__":
     parser.add_argument("directory", help="Directory containing FITS files.")
     parser.add_argument("-o", "--output-dir", default='.',
                         help=f"Sets output directory for graph file (default: {default_output_dir})")
-    parser.add_argument("-s", "--saturation", type=float, default=65000,
+    parser.add_argument("-s", "--saturation", type=float, default=default_saturation_point,
                         help=f"Saturation point: the maximum mean ADU to include in linear fit (default: {default_saturation_point})")
 
     parser.add_argument("--min-exp", type=float, default=None,
