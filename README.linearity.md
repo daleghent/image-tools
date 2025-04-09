@@ -5,8 +5,6 @@
 
 This tool analyzes the linearity of a camera sensor by processing a directory of FITS files. It computes mean pixel values, filters saturated frames, performs a least-squares linear fit, calculates R², and generates an annotated plot. The output provides insight into how well the sensor response tracks exposure time under various settings.
 
----
-
 ## Features
 
 - Calculates least-squares linear regression and R² across the provided images
@@ -15,8 +13,6 @@ This tool analyzes the linearity of a camera sensor by processing a directory of
 - Supports exposure time filtering (`--min-exp` and `--max-exp`)
 - Annotates percentage deviation from linearity
 - Outputs a high-resolution plot in PNG format
-
----
 
 ## Usage
 
@@ -36,8 +32,6 @@ python linearity.py [-h] [-o OUTPUT_DIR] [-s SATURATION] [--min-exp MIN] [--max-
 | `-s`, `--saturation` | Maximum mean ADU value to include in the linear fit (default: 65000)       |
 | `--min-exp`          | Minimum exposure time (in seconds) to include                              |
 | `--max-exp`          | Maximum exposure time (in seconds) to include                              |
-
----
 
 ## Virtual Environment Setup
 
@@ -72,8 +66,6 @@ matplotlib
 astropy
 ```
 
----
-
 ## Example
 
 ```bash
@@ -86,8 +78,6 @@ This will:
 - Include only exposure times between 0.5 and 5 seconds
 - Save the plot to `./results`
 
----
-
 ## Output
 
 - A `.png` file of a plot showing:
@@ -97,16 +87,11 @@ This will:
   - R² value
 - Console output of statistics and sample counts
 
----
-
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
-
----
 
 ## Contact
 
 For questions, improvements, or bug reports:  
 **Dale Ghent** – [daleg@elemental.org](mailto:daleg@elemental.org)
-
