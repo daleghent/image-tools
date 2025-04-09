@@ -148,7 +148,6 @@ def plot_and_save_graph(exposure_times, mean_values, unsat_exptimes, unsat_means
     plt.scatter(exposure_times, mean_values, color='black', label="Saturated", s=10)
     plt.scatter(unsat_exptimes, unsat_means, color='blue', label="Mean ADU (Used in Fit)", s=10)
     plt.plot(sorted(exposure_times), fit_line(sorted(exposure_times)), 'r--', linewidth=1, label="Least-Squares Fit")
-    # replaced by errorbar with stddev
     plt.xlabel("Exposure Time (s)")
     plt.ylabel("Mean ADU")
     plt.suptitle(f"{camera} Sensor Linearity", fontsize=12, y=0.96)
