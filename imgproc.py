@@ -16,16 +16,6 @@ FITS_EXTENSIONS = ('.fits', '.fit', '.fts')
 concurrency = 2
 groups = []
 
-def update_filter_keyword(header):
-    filter_mapping = {
-        "SL-g": "SG",
-        "SL-r": "SR",
-        "SL-i": "SI"
-    }
-    original_filter = header.get('FILTER', None)
-    if original_filter in filter_mapping:
-        header['FILTER'] = filter_mapping[original_filter]
-
 def calibrate_image(light_hdu, bias_dir, dark_dir, flat_dir, verbose):
     ccd = CCDData(light_hdu.data, meta=light_hdu.header, unit="adu")
 
@@ -77,7 +67,6 @@ def bin_image(data, bin_size, verbose):
 
 def process_single_image(file_path, bias_dir, dark_dir, flat_dir, bin_size, observer, output_dir, object_name, verbose):
     with fits.open(file_path) as hdul:
-        update_filter_keyword(hdul[0].header)
         calibrated_data = calibrate_image(hdul[0], bias_dir, dark_dir, flat_dir, verbose)
         binned_data = bin_image(calibrated_data, bin_size, verbose) if bin_size > 1 else calibrated_data
 
@@ -103,7 +92,6 @@ def process_group_stack(group_files, bias_dir, dark_dir, flat_dir, bin_size, obs
 
     for file_path in group_files:
         with fits.open(file_path) as hdul:
-            update_filter_keyword(hdul[0].header)
             calibrated_data = calibrate_image(hdul[0], bias_dir, dark_dir, flat_dir, verbose)          
             binned_data = bin_image(calibrated_data, bin_size, verbose) if bin_size > 1 else calibrated_data
             
