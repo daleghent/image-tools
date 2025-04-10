@@ -8,12 +8,16 @@ from astropy.time import Time
 from astropy.nddata import CCDData
 from astropy import units as u
 from ccdproc import combine, subtract_bias, subtract_dark, flat_correct
-from skimage.registration import phase_cross_correlation
+from multiprocessing import Pool, Manager, cpu_count
 from scipy.ndimage import shift
-from multiprocessing import Pool, Manager
+from skimage.registration import phase_cross_correlation
+
+default_bin = 1
+default_stackthresh = 150
+default_observer = "aavso:DGAH"
+default_concurrency = cpu_count()
 
 FITS_EXTENSIONS = ('.fits', '.fit', '.fts')
-concurrency = 2
 groups = []
 
 def calibrate_image(light_hdu, bias_dir, dark_dir, flat_dir, verbose):
@@ -61,20 +65,20 @@ def align_images(reference_image, target_image, verbose):
     aligned_image = shift(target_image, shift_result)
     return aligned_image
 
-def bin_image(data, bin_size, verbose):
-    shape = (data.shape[0] // bin_size, bin_size, data.shape[1] // bin_size, bin_size)
-    return data[:shape[0] * bin_size, :shape[2] * bin_size].reshape(shape).mean(axis=(1, 3))
+def bin_image(data, bin_level, verbose):
+    shape = (data.shape[0] // bin_level, bin_level, data.shape[1] // bin_level, bin_level)
+    return data[:shape[0] * bin_level, :shape[2] * bin_level].reshape(shape).mean(axis=(1, 3))
 
-def process_single_image(file_path, bias_dir, dark_dir, flat_dir, bin_size, observer, output_dir, object_name, verbose):
+def process_single_image(file_path, bias_dir, dark_dir, flat_dir, bin_level, observer, output_dir, object_name, verbose):
     with fits.open(file_path) as hdul:
         calibrated_data = calibrate_image(hdul[0], bias_dir, dark_dir, flat_dir, verbose)
-        binned_data = bin_image(calibrated_data, bin_size, verbose) if bin_size > 1 else calibrated_data
+        binned_data = bin_image(calibrated_data, bin_level, verbose) if bin_level > 1 else calibrated_data
 
         header = hdul[0].header
-        header['XBINNING'] = bin_size
-        header['XPIXSZ'] *= bin_size
-        header['YBINNING'] = bin_size
-        header['YPIXSZ'] *= bin_size
+        header['XBINNING'] = bin_level
+        header['XPIXSZ'] *= bin_level
+        header['YBINNING'] = bin_level
+        header['YPIXSZ'] *= bin_level
         header['OBSERVER'] = observer
         filter = header['FILTER']
 
@@ -86,14 +90,14 @@ def process_single_image(file_path, bias_dir, dark_dir, flat_dir, bin_size, obse
         print(f"Writing single file: {output_filename}")
         fits.writeto(output_path, binned_data.astype(np.float32), header, overwrite=True)
 
-def process_group_stack(group_files, bias_dir, dark_dir, flat_dir, bin_size, observer, output_dir, object_name, verbose, align):
+def process_group_stack(group_files, bias_dir, dark_dir, flat_dir, bin_level, observer, output_dir, object_name, verbose, align):
     calibrated_images = []
     timestamps = []
 
     for file_path in group_files:
         with fits.open(file_path) as hdul:
             calibrated_data = calibrate_image(hdul[0], bias_dir, dark_dir, flat_dir, verbose)          
-            binned_data = bin_image(calibrated_data, bin_size, verbose) if bin_size > 1 else calibrated_data
+            binned_data = bin_image(calibrated_data, bin_level, verbose) if bin_level > 1 else calibrated_data
             
             if align:
                 if calibrated_images:
@@ -126,13 +130,13 @@ def process_group_stack(group_files, bias_dir, dark_dir, flat_dir, bin_size, obs
     print(f"Writing stacked file: {output_filename}")
     fits.writeto(output_path, stacked_ccd.data.astype(np.float32), header, overwrite=True)
 
-def process_group(group_files, bias_dir, dark_dir, flat_dir, bin_size, observer, output_dir, object_name, verbose, align):
+def process_group(group_files, bias_dir, dark_dir, flat_dir, bin_level, observer, output_dir, object_name, verbose, align):
     if len(group_files) == 1:
-        process_single_image(group_files[0], bias_dir, dark_dir, flat_dir, bin_size, observer, output_dir, object_name, verbose)
+        process_single_image(group_files[0], bias_dir, dark_dir, flat_dir, bin_level, observer, output_dir, object_name, verbose)
     else:
-        process_group_stack(group_files, bias_dir, dark_dir, flat_dir, bin_size, observer, output_dir, object_name, verbose, align)
+        process_group_stack(group_files, bias_dir, dark_dir, flat_dir, bin_level, observer, output_dir, object_name, verbose, align)
 
-def process_images(input_dir, output_dir, bin_size, stack_height, bias_dir, dark_dir, flat_dir, observer, verbose, align):
+def process_images(input_dir, output_dir, bin_level, stack_height, bias_dir, dark_dir, flat_dir, observer, verbose, align):
     file_paths = sorted(
         [os.path.join(input_dir, f) for f in os.listdir(input_dir) if f.endswith(FITS_EXTENSIONS)],
         key=lambda x: Time(fits.getheader(x)['DATE-OBS'], format='isot', scale='utc')
@@ -143,7 +147,7 @@ def process_images(input_dir, output_dir, bin_size, stack_height, bias_dir, dark
         first_header = hdul[0].header
         object_name = first_header.get('OBJECT', 'UNKNOWN').replace(' ', '_')
         obs_date = Time(first_header['DATE-OBS']).to_value('iso', subfmt='date')
-        default_output_dir = f"{object_name}_{obs_date}_{observer}_STACKED"
+        default_output_dir = f"{object_name}_{obs_date}_{observer}_CALIB"
 
     if output_dir is None:
         output_dir = default_output_dir
@@ -157,24 +161,22 @@ def process_images(input_dir, output_dir, bin_size, stack_height, bias_dir, dark
     num_stacks = len(groups)
     print(f"Total stacks: {num_stacks}, Images per stack: {stack_height}")
 
-    pool_args = [(group, bias_dir, dark_dir, flat_dir, bin_size, observer, output_dir, object_name, verbose, align) for group in groups]
+    pool_args = [(group, bias_dir, dark_dir, flat_dir, bin_level, observer, output_dir, object_name, verbose, align) for group in groups]
 
     print(f"Starting processing with concurrency: {concurrency}")
     with Pool(processes=concurrency) as pool:
         pool.starmap(process_group, pool_args)
 
 def main():
-    from multiprocessing import cpu_count
-    global concurrency
 
     parser = argparse.ArgumentParser(description="Calibrate, align, bin, and stack FITS images.")
     parser.add_argument('input_dir', type=str, help="Directory containing source FITS files.")
     parser.add_argument('output_dir', nargs='?', default=None, type=str, help="Directory for output FITS files. Default is '<object_name>_<DATE-OBS>_<observer_code>_STACKED'.")
     parser.add_argument('-a', '--align', action='store_true', help="Enable image alignment.")
-    parser.add_argument('-b', '--bin-size', type=int, default=4, help="Binning level (default: 4).")
-    parser.add_argument('-c', '--concurrency', type=int, default=cpu_count(), help="Number of concurrent processes to use (default: number of CPUs).")
-    parser.add_argument('-o', '--observer', type=str, default='DGO', help="Observer code (default: DGO).")
-    parser.add_argument('-s', '--stack-threshold', type=int, default=150, help="Stacking threshold (default: 150).")
+    parser.add_argument('-b', '--bin-level', type=int, default=default_bin, help=f"Binning level (default: {default_bin}).")
+    parser.add_argument('-c', '--concurrency', type=int, default=default_concurrency, help=f"Number of concurrent threads to use (default: {default_concurrency}).")
+    parser.add_argument('-o', '--observer', type=str, default=default_observer, help=f"Observer code (default: {default_observer}).")
+    parser.add_argument('-s', '--stack-threshold', type=int, default=default_stackthresh, help=f"Stacking threshold (default: {default_stackthresh}).")
     parser.add_argument('-v', '--verbose', action='store_true', help="Enable verbose output.")
     parser.add_argument('-B', '--bias-dir', type=str, help="Directory containing master bias frames.")
     parser.add_argument('-D', '--dark-dir', type=str, help="Directory containing master dark frames.")
@@ -184,7 +186,7 @@ def main():
 
     input_dir = args.input_dir
     output_dir = args.output_dir
-    bin_size = args.bin_size
+    bin_level = args.bin_level
     stack_threshold = args.stack_threshold
     bias_dir = args.bias_dir
     dark_dir = args.dark_dir
@@ -197,7 +199,7 @@ def main():
     num_files = len([f for f in os.listdir(input_dir) if f.endswith(FITS_EXTENSIONS)])
     stack_height = 1 if num_files <= stack_threshold else round(num_files / stack_threshold)
 
-    process_images(input_dir, output_dir, bin_size, stack_height, bias_dir, dark_dir, flat_dir, observer, verbose, align)
+    process_images(input_dir, output_dir, bin_level, stack_height, bias_dir, dark_dir, flat_dir, observer, verbose, align)
 
 if __name__ == "__main__":
     main()
