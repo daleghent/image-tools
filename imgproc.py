@@ -31,6 +31,10 @@ ALIGN = False
 FITS_EXTENSIONS = ('.fits', '.fit', '.fts', '.ftz', '.fz', '.fits.gz')
 groups = []
 
+class CalibrationError(Exception):
+    """Exception raised when calibration frames are missing or invalid."""
+    pass
+
 
 def calibrate_image(light_hdu):
     """Apply bias, dark, and flat corrections to a single HDU."""
@@ -51,24 +55,21 @@ def calibrate_image(light_hdu):
     # Bias
     master_bias = get_frame_data(BIAS_DIR, ['SET-TEMP', 'GAIN', 'OFFSET', 'READOUTM', 'INSTRUME'])
     if BIAS_DIR and master_bias is None:
-        print("Error: No applicable bias calibration frame found.")
-        exit(1)
+        raise CalibrationError("No applicable bias calibration frame found.")
     if master_bias is not None:
         ccd = subtract_bias(ccd, master_bias)
 
     # Dark
     master_dark = get_frame_data(DARK_DIR, ['EXPOSURE', 'SET-TEMP', 'GAIN', 'OFFSET', 'READOUTM', 'INSTRUME'])
     if DARK_DIR and master_dark is None:
-        print("Error: No applicable dark calibration frame found.")
-        exit(1)
+        raise CalibrationError("No applicable dark calibration frame found.")
     if master_dark is not None:
         ccd = subtract_dark(ccd, master_dark, exposure_time='EXPOSURE', exposure_unit=u.s)
 
     # Flat
     master_flat = get_frame_data(FLAT_DIR, ['FILTER'])
     if FLAT_DIR and master_flat is None:
-        print("Error: No applicable flat calibration frame found.")
-        exit(1)
+        raise CalibrationError("No applicable flat calibration frame found.")
     if master_flat is not None:
         ccd = flat_correct(ccd, master_flat)
 
@@ -93,47 +94,57 @@ def bin_image(data):
 
 
 def process_single_image(file_path, output_dir, object_name):
-    with fits.open(file_path) as hdul:
-        calibrated = calibrate_image(hdul[0])
-        binned = bin_image(calibrated)
-        header = hdul[0].header
+    try:
+        with fits.open(file_path) as hdul:
+            calibrated = calibrate_image(hdul[0])
+    except CalibrationError as e:
+        print(f"Calibration error for {file_path}: {e}")
+        return
 
-        # Update header
-        header['XBINNING'] = BIN_LEVEL
-        header['XPIXSZ'] *= BIN_LEVEL
-        header['YBINNING'] = BIN_LEVEL
-        header['YPIXSZ'] *= BIN_LEVEL
-        header['OBSERVER'] = OBSERVER
-        filt = header.get('FILTER', 'UNKNOWN')
+    binned = bin_image(calibrated)
+    header = hdul[0].header
 
-        # Timestamp handling
-        try:
-            ts = Time(header['DATE-OBS'], format='isot', scale='utc')
-        except Exception as e:
-            print(f"Error parsing DATE-OBS in {file_path}: {e}")
-            return
-        ts_iso = ts.to_value('iso', subfmt='date')
-        output_fname = f"{object_name}_{OBSERVER}_{filt}_{ts_iso.replace('-', '')}_{ts.jd:.3f}.fits"
-        out_path = os.path.join(output_dir, output_fname)
+    # Update header
+    header['XBINNING'] = BIN_LEVEL
+    header['XPIXSZ'] *= BIN_LEVEL
+    header['YBINNING'] = BIN_LEVEL
+    header['YPIXSZ'] *= BIN_LEVEL
+    header['OBSERVER'] = OBSERVER
+    filt = header.get('FILTER', 'UNKNOWN')
 
-        print(f"Writing single file: {output_fname}")
-        fits.writeto(out_path, binned.astype(np.float32), header, overwrite=True)
+    # Timestamp handling
+    try:
+        ts = Time(header['DATE-OBS'], format='isot', scale='utc')
+    except Exception as e:
+        print(f"Error parsing DATE-OBS in {file_path}: {e}")
+        return
+    ts_iso = ts.to_value('iso', subfmt='date')
+    output_fname = f"{object_name}_{OBSERVER}_{filt}_{ts_iso.replace('-', '')}_{ts.jd:.3f}.fits"
+    out_path = os.path.join(output_dir, output_fname)
+
+    print(f"Writing single file: {output_fname}")
+    fits.writeto(out_path, binned.astype(np.float32), header, overwrite=True)
 
 
 def process_group_stack(group_files, output_dir, object_name):
     calibrated_list = []
     times = []
     for fp in group_files:
-        with fits.open(fp) as hdul:
-            cal = calibrate_image(hdul[0])
-            binned = bin_image(cal)
-            if ALIGN and calibrated_list:
-                binned = align_images(calibrated_list[0].data, binned)
-            calibrated_list.append(CCDData(binned, unit="adu"))
-            times.append(hdul[0].header.get('DATE-OBS'))
+        try:
+            with fits.open(fp) as hdul:
+                cal = calibrate_image(hdul[0])
+        except CalibrationError as e:
+            print(f"Calibration error for {fp}: {e}; skipping.")
+            continue
+
+        binned = bin_image(cal)
+        if ALIGN and calibrated_list:
+            binned = align_images(calibrated_list[0].data, binned)
+        calibrated_list.append(CCDData(binned, unit="adu"))
+        times.append(hdul[0].header.get('DATE-OBS'))
 
     if not times:
-        print("No valid timestamps found; skipping stack.")
+        print("No valid frames left for stacking; skipping this group.")
         return
 
     stacked = combine(
