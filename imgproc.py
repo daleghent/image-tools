@@ -37,9 +37,13 @@ class CalibrationError(Exception):
 
 
 def calibrate_image(light_hdu):
-    """Apply bias, dark, and flat corrections to a single HDU."""
+    """Apply bias, dark, and flat corrections to a single HDU.
+    Returns: (data, bias_applied, dark_applied, flat_applied)"""
     header = light_hdu.header
     ccd = CCDData(light_hdu.data, meta=header, unit="adu")
+    bias_applied = False
+    dark_applied = False
+    flat_applied = False
 
     def get_frame_data(master_dir, keywords):
         if not master_dir:
@@ -58,6 +62,7 @@ def calibrate_image(light_hdu):
         raise CalibrationError("No applicable bias calibration frame found.")
     if master_bias is not None:
         ccd = subtract_bias(ccd, master_bias)
+        bias_applied = True
 
     # Dark
     master_dark = get_frame_data(DARK_DIR, ['EXPOSURE', 'SET-TEMP', 'GAIN', 'OFFSET', 'READOUTM', 'INSTRUME'])
@@ -65,6 +70,7 @@ def calibrate_image(light_hdu):
         raise CalibrationError("No applicable dark calibration frame found.")
     if master_dark is not None:
         ccd = subtract_dark(ccd, master_dark, exposure_time='EXPOSURE', exposure_unit=u.s)
+        dark_applied = True
 
     # Flat
     master_flat = get_frame_data(FLAT_DIR, ['FILTER'])
@@ -72,8 +78,9 @@ def calibrate_image(light_hdu):
         raise CalibrationError("No applicable flat calibration frame found.")
     if master_flat is not None:
         ccd = flat_correct(ccd, master_flat)
+        flat_applied = True
 
-    return ccd.data.astype(np.float32)
+    return ccd.data.astype(np.float32), bias_applied, dark_applied, flat_applied
 
 
 def align_images(reference_image, target_image):
@@ -96,13 +103,13 @@ def bin_image(data):
 def process_single_image(file_path, output_dir, object_name):
     try:
         with fits.open(file_path) as hdul:
-            calibrated = calibrate_image(hdul[0])
+            data, bias_flag, dark_flag, flat_flag = calibrate_image(hdul[0])
+            header = hdul[0].header
     except CalibrationError as e:
         print(f"Calibration error for {file_path}: {e}")
         return
 
-    binned = bin_image(calibrated)
-    header = hdul[0].header
+    binned = bin_image(data)
 
     # Update header
     header['XBINNING'] = BIN_LEVEL
@@ -110,6 +117,9 @@ def process_single_image(file_path, output_dir, object_name):
     header['YBINNING'] = BIN_LEVEL
     header['YPIXSZ'] *= BIN_LEVEL
     header['OBSERVER'] = OBSERVER
+    header['BIASCAL'] = bias_flag
+    header['DARKCAL'] = dark_flag
+    header['FLATCAL'] = flat_flag
     filt = header.get('FILTER', 'UNKNOWN')
 
     # Timestamp handling
@@ -129,15 +139,24 @@ def process_single_image(file_path, output_dir, object_name):
 def process_group_stack(group_files, output_dir, object_name):
     calibrated_list = []
     times = []
+    bias_flags = []
+    dark_flags = []
+    flat_flags = []
+
     for fp in group_files:
         try:
             with fits.open(fp) as hdul:
-                cal = calibrate_image(hdul[0])
+                data, b_f, d_f, f_f = calibrate_image(hdul[0])
+                flags_header = hdul[0].header
         except CalibrationError as e:
             print(f"Calibration error for {fp}: {e}; skipping.")
             continue
 
-        binned = bin_image(cal)
+        bias_flags.append(b_f)
+        dark_flags.append(d_f)
+        flat_flags.append(f_f)
+
+        binned = bin_image(data)
         if ALIGN and calibrated_list:
             binned = align_images(calibrated_list[0].data, binned)
         calibrated_list.append(CCDData(binned, unit="adu"))
@@ -161,6 +180,9 @@ def process_group_stack(group_files, output_dir, object_name):
     hdr = fits.getheader(group_files[0])
     hdr['DATE-AVG'] = midpoint.isot
     hdr['OBSERVER'] = OBSERVER
+    hdr['BIASCAL'] = all(bias_flags)
+    hdr['DARKCAL'] = all(dark_flags)
+    hdr['FLATCAL'] = all(flat_flags)
 
     mid_iso = midpoint.to_value('iso', subfmt='date')
     mid_jd = midpoint.jd
