@@ -3,6 +3,7 @@
 import os
 import argparse
 import numpy as np
+import warnings
 from astropy.io import fits
 from astropy.time import Time
 from astropy.nddata import CCDData
@@ -27,6 +28,7 @@ OBSERVER = default_observer
 VERBOSE = False
 CONCURRENCY = default_concurrency
 ALIGN = False
+FILTER_NAME = None  # Only process images matching this FILTER header value
 
 FITS_EXTENSIONS = ('.fits', '.fit', '.fts', '.ftz', '.fz', '.fits.gz')
 groups = []
@@ -103,6 +105,9 @@ def bin_image(data):
 def process_single_image(file_path, output_dir, object_name):
     try:
         with fits.open(file_path) as hdul:
+            filt_header = hdul[0].header.get('FILTER')
+            if FILTER_NAME and filt_header != FILTER_NAME:
+                return
             data, bias_flag, dark_flag, flat_flag = calibrate_image(hdul[0])
             header = hdul[0].header
     except CalibrationError as e:
@@ -111,7 +116,6 @@ def process_single_image(file_path, output_dir, object_name):
 
     binned = bin_image(data)
 
-    # Update header
     header['XBINNING'] = BIN_LEVEL
     header['XPIXSZ'] *= BIN_LEVEL
     header['YBINNING'] = BIN_LEVEL
@@ -120,16 +124,17 @@ def process_single_image(file_path, output_dir, object_name):
     header['BIASCAL'] = bias_flag
     header['DARKCAL'] = dark_flag
     header['FLATCAL'] = flat_flag
-    filt = header.get('FILTER', 'UNKNOWN')
 
-    # Timestamp handling
-    try:
-        ts = Time(header['DATE-OBS'], format='isot', scale='utc')
-    except Exception as e:
-        print(f"Error parsing DATE-OBS in {file_path}: {e}")
-        return
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', message=r'.*dubious year.*')
+        try:
+            ts = Time(header['DATE-OBS'], format='isot', scale='utc')
+        except Exception as e:
+            print(f"Error parsing DATE-OBS in {file_path}: {e}")
+            return
     ts_iso = ts.to_value('iso', subfmt='date')
-    output_fname = f"{object_name}_{OBSERVER}_{filt}_{ts_iso.replace('-', '')}_{ts.jd:.3f}.fits"
+    header['FILTER'] = header.get('FILTER', 'UNKNOWN')
+    output_fname = f"{object_name}_{OBSERVER}_{header['FILTER']}_{ts_iso.replace('-', '')}_{ts.jd:.3f}.fits"
     out_path = os.path.join(output_dir, output_fname)
 
     print(f"Writing single file: {output_fname}")
@@ -146,8 +151,10 @@ def process_group_stack(group_files, output_dir, object_name):
     for fp in group_files:
         try:
             with fits.open(fp) as hdul:
+                filt_header = hdul[0].header.get('FILTER')
+                if FILTER_NAME and filt_header != FILTER_NAME:
+                    continue
                 data, b_f, d_f, f_f = calibrate_image(hdul[0])
-                flags_header = hdul[0].header
         except CalibrationError as e:
             print(f"Calibration error for {fp}: {e}; skipping.")
             continue
@@ -166,6 +173,10 @@ def process_group_stack(group_files, output_dir, object_name):
         print("No valid frames left for stacking; skipping this group.")
         return
 
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', message=r'.*dubious year.*')
+        midpoint = Time(times, format='isot', scale='utc').mean()
+
     stacked = combine(
         calibrated_list,
         method='average',
@@ -176,17 +187,17 @@ def process_group_stack(group_files, output_dir, object_name):
         sigma_clip_dev_func=np.std
     )
 
-    midpoint = Time(times, format='isot', scale='utc').mean()
     hdr = fits.getheader(group_files[0])
     hdr['DATE-AVG'] = midpoint.isot
     hdr['OBSERVER'] = OBSERVER
     hdr['BIASCAL'] = all(bias_flags)
     hdr['DARKCAL'] = all(dark_flags)
     hdr['FLATCAL'] = all(flat_flags)
+    hdr['FILTER'] = FILTER_NAME if FILTER_NAME else hdr.get('FILTER', 'UNKNOWN')
 
     mid_iso = midpoint.to_value('iso', subfmt='date')
     mid_jd = midpoint.jd
-    out_fname = f"{object_name}_{OBSERVER}_{mid_iso.replace('-', '')}_{mid_jd:.3f}.fits"
+    out_fname = f"{object_name}_{OBSERVER}_{hdr['FILTER']}_{mid_iso.replace('-', '')}_{mid_jd:.3f}.fits"
     out_path = os.path.join(output_dir, out_fname)
 
     print(f"Writing stacked file: {out_fname}")
@@ -201,28 +212,33 @@ def process_group(group_files, output_dir, object_name):
 
 
 def process_images(input_dir, output_dir, stack, stack_height):
-    # Sort FITS by observation time
     def safe_time(p):
         try:
-            return Time(fits.getheader(p)['DATE-OBS'], format='isot', scale='utc')
+            hdr = fits.getheader(p)
+            if FILTER_NAME and hdr.get('FILTER') != FILTER_NAME:
+                return Time('1900-01-01T00:00:00')
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', message=r'.*dubious year.*')
+                return Time(hdr['DATE-OBS'], format='isot', scale='utc')
         except Exception:
-            print(f"Skipping {p} due to bad DATE-OBS")
+            print(f"Skipping {p} due to bad DATE-OBS or filter mismatch")
             return Time('1900-01-01T00:00:00')
 
-    fps = sorted(
-        [os.path.join(input_dir, f) for f in os.listdir(input_dir) if f.lower().endswith(FITS_EXTENSIONS)],
-        key=safe_time
-    )
+    fps = [os.path.join(input_dir, f) for f in os.listdir(input_dir) if f.lower().endswith(FITS_EXTENSIONS)]
+    fps = sorted(fps, key=safe_time)
 
+    if FILTER_NAME:
+        fps = [p for p in fps if fits.getheader(p).get('FILTER') == FILTER_NAME]
     if not fps:
-        print(f"No FITS files found in {input_dir}")
+        print(f"No FITS files found in {input_dir} matching filter '{FILTER_NAME}'")
         return
 
-    # Determine object and default output
     with fits.open(fps[0]) as hdul:
         hdr0 = hdul[0].header
         obj = hdr0.get('OBJECT', 'UNKNOWN').replace(' ', '_')
-        date_iso = Time(hdr0['DATE-OBS'], format='isot', scale='utc').to_value('iso', subfmt='date')
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', message=r'.*dubious year.*')
+            date_iso = Time(hdr0['DATE-OBS'], format='isot', scale='utc').to_value('iso', subfmt='date')
         default_out = f"{obj}_{date_iso}_{OBSERVER}_CAL"
 
     if output_dir is None:
@@ -244,7 +260,7 @@ def process_images(input_dir, output_dir, stack, stack_height):
 
 
 def main():
-    global BIAS_DIR, DARK_DIR, FLAT_DIR, BIN_LEVEL, OBSERVER, VERBOSE, CONCURRENCY, ALIGN
+    global BIAS_DIR, DARK_DIR, FLAT_DIR, BIN_LEVEL, OBSERVER, VERBOSE, CONCURRENCY, ALIGN, FILTER_NAME
 
     parser = argparse.ArgumentParser(description="Calibrate, align, bin, and stack FITS images.")
     parser.add_argument('input_dir', type=str, help="Directory containing source FITS files.")
@@ -259,6 +275,7 @@ def main():
     parser.add_argument('-B', '--bias-dir', type=str, help="Directory containing master bias frames.")
     parser.add_argument('-D', '--dark-dir', type=str, help="Directory containing master dark frames.")
     parser.add_argument('-F', '--flat-dir', type=str, help="Directory containing master flat frames.")
+    parser.add_argument('-f', '--filter', dest='filter_name', type=str, help="Only process images with this FILTER header value.")
 
     args = parser.parse_args()
     BIAS_DIR = args.bias_dir
@@ -269,6 +286,7 @@ def main():
     VERBOSE = args.verbose
     CONCURRENCY = args.concurrency
     ALIGN = args.align
+    FILTER_NAME = args.filter_name
 
     num_files = len([f for f in os.listdir(args.input_dir) if f.lower().endswith(FITS_EXTENSIONS)])
     stack_height = 1 if num_files <= args.stack_threshold else round(num_files / args.stack_threshold)
