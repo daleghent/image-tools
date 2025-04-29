@@ -15,7 +15,7 @@ from ccdproc import combine
 warnings.filterwarnings('ignore', category=FITSFixedWarning, append=True)
 
 def create_master_frame(files, output_filename):
-    """Combine FITS files into a master frame using median stacking."""
+    """Combine BIAS or DARK FITS files into a master frame using median stacking."""
     header = None
     ccd_list = []
 
@@ -57,7 +57,12 @@ def organize_files_by_type(directory):
                 header = hdul[0].header
 
                 # Get the image type from the header (e.g., BIAS, DARK, FLAT)
-                image_type = header.get('IMAGETYP', 'UNKNOWN').upper()
+                image_type = header.get('IMAGETYP')
+
+                if image_type is None:
+                    image_type = header.get('FRAMETYP', 'UNKNOWN')
+
+                image_type = str(image_type).strip().upper()
 
                 # Extract additional information based on image type
                 binning = f"{header.get('XBINNING', 1)}x{header.get('YBINNING', 1)}"  # Default binning is 1x1
@@ -66,9 +71,6 @@ def organize_files_by_type(directory):
 
                 if image_type == 'DARK':
                     key = (image_type, exposure_time, set_temp, binning)
-                elif image_type == 'FLAT':
-                    filter_name = header.get('FILTER', 'UNKNOWN')  # Filter name for FLAT frames
-                    key = (image_type, filter_name, binning)
                 elif image_type == 'BIAS':
                     key = (image_type, set_temp, binning)
                 else:
@@ -100,10 +102,6 @@ def generate_master_calibration_frames(input_directory, output_directory):
             exposure_time, set_temp, binning = key[1], key[2], key[3]
             # Output filename for DARK frames includes exposure time and binning
             output_filename = os.path.join(output_directory, f"masterDARK_{exposure_time}_{set_temp}_{binning}.fits")
-        elif image_type == 'FLAT':
-            filter_name, binning = key[1], key[2]
-            # Output filename for FLAT frames includes filter name and binning
-            output_filename = os.path.join(output_directory, f"masterFLAT_{filter_name}_{binning}.fits")
         else:
             continue  # Skip unsupported image types
 
