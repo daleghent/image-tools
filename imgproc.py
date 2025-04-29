@@ -67,11 +67,11 @@ def calibrate_image(light_hdu):
         bias_applied = True
 
     # Dark
-    master_dark = get_frame_data(DARK_DIR, ['EXPOSURE', 'SET-TEMP', 'GAIN', 'OFFSET', 'READOUTM', 'INSTRUME'])
+    master_dark = get_frame_data(DARK_DIR, ['EXPTIME', 'SET-TEMP', 'GAIN', 'OFFSET', 'READOUTM', 'INSTRUME'])
     if DARK_DIR and master_dark is None:
         raise CalibrationError("No applicable dark calibration frame found.")
     if master_dark is not None:
-        ccd = subtract_dark(ccd, master_dark, exposure_time='EXPOSURE', exposure_unit=u.s)
+        ccd = subtract_dark(ccd, master_dark, exposure_time='EXPTIME', exposure_unit=u.s)
         dark_applied = True
 
     # Flat
@@ -134,7 +134,7 @@ def process_single_image(file_path, output_dir, object_name):
             return
     ts_iso = ts.to_value('iso', subfmt='date')
     header['FILTER'] = header.get('FILTER', 'UNKNOWN')
-    output_fname = f"{object_name}_{OBSERVER}_{header['FILTER']}_{ts_iso.replace('-', '')}_{ts.jd:.3f}.fits"
+    output_fname = f"{object_name}_{OBSERVER}_{header['FILTER']}_{ts_iso.replace('-', '')}_{ts.jd:.8f}.fits"
     out_path = os.path.join(output_dir, output_fname)
 
     print(f"Writing single file: {output_fname}")
