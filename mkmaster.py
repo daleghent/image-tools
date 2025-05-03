@@ -17,8 +17,8 @@ warnings.filterwarnings('ignore', category=FITSFixedWarning, append=True)
 # Accepted FITS extensions
 FITS_EXTENSIONS = ('.fit', '.fits', '.fts', '.fits.fz')
 
-default_sigma_high = 5.0
-default_sigma_low = 5.0
+default_sigma_high = 3.0
+default_sigma_low = 3.0
 default_min_frames = 15
 
 def create_master_frame(files, output_filename, sigma_low, sigma_high, min_frames, bias_master=None, image_type=None):
@@ -53,7 +53,7 @@ def create_master_frame(files, output_filename, sigma_low, sigma_high, min_frame
         print("Warning: Less than 3 frames provided; master may be noisy.")
 
     print(f"{nframes} files successfully read.")
-    print(f"Using sigma clipping: low={sigma_low}, high={sigma_high}")
+    print(f"Combining master {image_type} using sigma clipping: low={sigma_low}, high={sigma_high}")
 
     master_frame = combine(
         ccd_list,
@@ -66,10 +66,11 @@ def create_master_frame(files, output_filename, sigma_low, sigma_high, min_frame
         sigma_clip_dev_func=mad_std
     )
 
-    master_frame.meta['COMBINED'] = True
-    master_frame.meta['NFRAMES'] = nframes
-    master_frame.meta['SIGMALO'] = sigma_low
-    master_frame.meta['SIGMAHI'] = sigma_high
+    master_frame.meta['IMAGETYP'] = (f"master{image_type}", "Image type")
+    master_frame.meta['COMBINED'] = (True, "Image is a combination of subframes")
+    master_frame.meta['NFRAMES'] = (nframes, "Number of input subframes")
+    master_frame.meta['SIGMALO'] = (sigma_low, "Sigma clipping low")
+    master_frame.meta['SIGMAHI'] = (sigma_high, "Sigma clipping high")
 
     master_frame.write(output_filename, overwrite=True, hdu_mask=None, hdu_uncertainty=None)
 
