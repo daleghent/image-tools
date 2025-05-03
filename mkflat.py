@@ -8,18 +8,24 @@ from pathlib import Path
 from ccdproc import ImageFileCollection, CCDData, combine, subtract_bias, subtract_dark
 from astropy import units as u
 from astropy.io import fits
-from astropy.stats import mad_std
+from astropy.stats import mad_std, sigma_clip
 from astropy.wcs import FITSFixedWarning
 
+default_sigma_high = 3.0
+default_sigma_low = 3.0
+
+# Suppress WCS-related warnings from FITS headers
 warnings.simplefilter('ignore', category=FITSFixedWarning)
 
 def main():
     parser = argparse.ArgumentParser(description="Calibrate and combine flat images to create a master flat.")
-    parser.add_argument("-i", "--input_dir", required=True, help="Directory containing the uncalibrated flat images.")
-    parser.add_argument("-o", "--output_dir", required=True, help="Directory to store the calibrated master flat.")
-    parser.add_argument("-l", "--limit", type=int, required=False, help="Limit files used to this number (optional)")
-    parser.add_argument("-D", "--dark_file", required=False, help="Path to the dark calibration file (optional).")
-    parser.add_argument("-B", "--bias_file", required=False, help="Path to the bias calibration file (optional).")
+    parser.add_argument("input_dir", help="Directory containing the uncalibrated flat images.")
+    parser.add_argument("output_dir", nargs="?", default=".", help="Directory to store the calibrated master flat (default: current directory).")
+    parser.add_argument("-l", "--limit", type=int, help="Limit files used to this number (optional)")
+    parser.add_argument("-D", "--dark_file", help="Path to the dark calibration file (optional).")
+    parser.add_argument("-B", "--bias_file", help="Path to the bias calibration file (optional).")
+    parser.add_argument("--sigma-low", type=float, default=default_sigma_low, help=f"Low threshold for sigma clipping (default: {default_sigma_low})")
+    parser.add_argument("--sigma-high", type=float, default=default_sigma_high, help=f"High threshold for sigma clipping (default: {default_sigma_high})")
 
     args = parser.parse_args()
 
@@ -28,31 +34,29 @@ def main():
     file_limit = args.limit if args.limit else -1
     dark_file = Path(args.dark_file) if args.dark_file else None
     bias_file = Path(args.bias_file) if args.bias_file else None
+    sigma_low = args.sigma_low
+    sigma_high = args.sigma_high
 
-    # Validate input directory
     if not input_dir.is_dir():
         raise ValueError(f"Input directory '{input_dir}' does not exist.")
 
-    # Validate bias file if provided
+    # Load bias frame if provided
     bias_ccd = None
     if bias_file:
         if not bias_file.is_file():
             raise ValueError(f"Bias file '{bias_file}' does not exist.")
-        print(f"Reading bias file {Path(bias_file).name}")
+        print(f"Reading bias file {bias_file.name}")
         bias_ccd = CCDData.read(bias_file, unit="adu")
 
-    # Validate dark file if provided
+    # Load dark frame if provided
     dark_ccd = None
     if dark_file:
         if not dark_file.is_file():
             raise ValueError(f"Dark file '{dark_file}' does not exist.")
-        print(f"Reading dark file {Path(dark_file).name}")
+        print(f"Reading dark file {dark_file.name}")
         dark_ccd = CCDData.read(dark_file, unit="adu")
 
-    # Create output directory if it doesn't exist
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Create an ImageFileCollection for the input directory
     flat_collection = ImageFileCollection(input_dir, glob_include="*.fits")
 
     calibrated_flats = []
@@ -68,49 +72,69 @@ def main():
             break
 
         i += 1
-
-        # Load the flat image
         print(f"Reading flat file {flat_path}")
         flat_ccd = CCDData.read(input_dir / flat_path, unit="adu")
 
-        # Apply bias correction if provided
+        # Apply bias subtraction if a bias frame was provided
         if bias_ccd is not None:
             flat_ccd = subtract_bias(flat_ccd, bias_ccd)
 
-        # Subtract the dark if provided
+        # Apply dark subtraction if a dark frame was provided
         if dark_ccd is not None:
-            flat_ccd = subtract_dark(flat_ccd, dark_ccd, exposure_time="EXPOSURE", exposure_unit=u.second)
+            try:
+                flat_ccd = subtract_dark(flat_ccd, dark_ccd, exposure_time="EXPOSURE", exposure_unit=u.second)
+            except Exception as e:
+                print(f"WARNING: Dark subtraction failed on {flat_path}: {e}")
+                continue
 
-        # Add the calibrated flat frame data to the list of calibrated flats
         calibrated_flats.append(flat_ccd)
 
-        # Extract metadata once for creating the master flat file name
+        # Extract metadata for naming and bookkeeping
         if filter_name is None:
-            filter_name = flat_ccd.header.get("FILTER", "UNKNOWN-FILTER")
-            if filter_name == "UNKNOWN-FILTER":
-                print("FATAL: Could not find the FILTER keyword in the first flat frame!")
-                exit(1)
+            filter_name = flat_ccd.header.get("FILTER")
+            if not filter_name:
+                raise KeyError(f"No FILTER keyword found in header of {flat_path}")
+
         if binning_level is None:
-            binX = flat_ccd.header.get("XBINNING", "UNKNOWN-BINX")
-            binY = flat_ccd.header.get("YBINNING", "UNKNOWN-BINY")
+            binX = flat_ccd.header.get("XBINNING")
+            binY = flat_ccd.header.get("YBINNING")
+            if not binX or not binY:
+                raise KeyError(f"Missing XBINNING or YBINNING keyword in header of {flat_path}")
             binning_level = f"{binX}x{binY}"
 
-    # These don't need to occupy memory anymore
+    # Release memory used by calibration frames
     bias_ccd = None
     dark_ccd = None
 
-    # Combine the calibrated flats with sigma clipping
-    print("Combining calibrated flats into a master flat...")
-    master_flat = combine(calibrated_flats, method="average", dtype=np.float32)
+    print(f"Combining calibrated flats using sigma clipping (low={sigma_low}, high={sigma_high})...")
 
-    # Create the master flat filename
+    # Combine the calibrated flat frames using a sigma-clipped average
+    master_flat = combine(
+        calibrated_flats,
+        method="average",
+        sigma_clip=sigma_clip,
+        sigma_clip_low_thresh=sigma_low,
+        sigma_clip_high_thresh=sigma_high,
+        sigma_clip_func=np.ma.median,
+        sigma_clip_dev_func=mad_std,
+        dtype=np.float32
+    )
+
+    # Normalize to mean = 1.0
+    print("Normalizing master flat to mean of 1.0")
+    master_flat.data /= np.mean(master_flat.data)
+
+    # Add metadata
+    master_flat.header["IMAGETYP"] = ("masterFLAT", "Image type")
+    master_flat.header["NORM"] = (True, "Flat field normalized to mean=1.0")
+    master_flat.header['NFRAMES'] = (len(calibrated_flats), "Number of input subframes")
+    master_flat.header['SIGMALO'] = (sigma_low, "Sigma clipping low")
+    master_flat.header['SIGMAHI'] = (sigma_high, "Sigma clipping high")
+
+    # Write output
     master_flat_name = f"masterFLAT_{filter_name}_{binning_level}.fits"
     master_flat_path = output_dir / master_flat_name
 
-    # Update the IMAGETYP keyword
-    master_flat.header["IMAGETYP"] = "masterFLAT"
-
-    # Save the master flat
     master_flat.write(master_flat_path, overwrite=True, hdu_mask=None, hdu_uncertainty=None)
     print(f"Master flat saved to {master_flat_path}")
 
