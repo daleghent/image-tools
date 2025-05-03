@@ -17,7 +17,10 @@ warnings.filterwarnings('ignore', category=FITSFixedWarning, append=True)
 # Accepted FITS extensions
 FITS_EXTENSIONS = ('.fit', '.fits', '.fts', '.fits.fz')
 
-def create_master_frame(files, output_filename):
+default_sigma_high=5.0
+default_sigma_low=5.0
+
+def create_master_frame(files, output_filename, sigma_low, sigma_high):
     """Combine BIAS or DARK FITS files into a master frame using sigma-clipped average."""
     ccd_list = []
 
@@ -48,10 +51,10 @@ def create_master_frame(files, output_filename):
         method='average',
         dtype=np.float32,
         sigma_clip=True,
-        sigma_clip_low_thresh=5,
-        sigma_clip_high_thresh=5,
+        sigma_clip_low_thresh=sigma_low,
+        sigma_clip_high_thresh=sigma_high,
         sigma_clip_func=np.ma.median,
-        sigma_clip_dev_func=mad_std  # Corrected: typo fixed here
+        sigma_clip_dev_func=mad_std
     )
 
     # Tag header to indicate it's a combined master frame
@@ -102,7 +105,7 @@ def organize_files_by_type(directory):
 
     return file_groups
 
-def generate_master_calibration_frames(input_directory, output_directory):
+def generate_master_calibration_frames(input_directory, output_directory, sigma_low, sigma_high):
     """Generate master calibration frames from FITS files in the specified directory."""
     # Ensure the output directory exists
     os.makedirs(output_directory, exist_ok=True)
@@ -125,7 +128,7 @@ def generate_master_calibration_frames(input_directory, output_directory):
             continue  # Guard against unsupported types (should not happen)
 
         # Create the master frame for this group
-        create_master_frame(files, output_filename)
+        create_master_frame(files, output_filename, sigma_low, sigma_high)
 
 def parse_arguments():
     """Parse command-line arguments using argparse."""
@@ -140,6 +143,14 @@ def parse_arguments():
         "output_dir",
         help="Directory where the master calibration frames will be saved."
     )
+    parser.add_argument(
+        "--sigma-low", type=float, default=default_sigma_low,
+        help=f"Lower threshold for sigma clipping (default: {default_sigma_low})"
+    )
+    parser.add_argument(
+        "--sigma-high", type=float, default=default_sigma_high,
+        help=f"Upper threshold for sigma clipping (default: {default_sigma_high})"
+    )
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -147,4 +158,4 @@ if __name__ == "__main__":
     args = parse_arguments()
 
     # Begin master frame generation
-    generate_master_calibration_frames(args.input_dir, args.output_dir)
+    generate_master_calibration_frames(args.input_dir, args.output_dir, args.sigma_low, args.sigma_high)
