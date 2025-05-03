@@ -140,8 +140,8 @@ def parse_arguments():
         help="Directory containing raw calibration FITS files (BIAS, DARK)."
     )
     parser.add_argument(
-        "output_dir",
-        help="Directory where the master calibration frames will be saved."
+        "output_dir", nargs='?', default=None,
+        help="Directory where the master calibration frame will be saved."
     )
     parser.add_argument(
         "--sigma-low", type=float, default=default_sigma_low,
@@ -156,6 +156,11 @@ def parse_arguments():
 if __name__ == "__main__":
     # Parse CLI arguments
     args = parse_arguments()
+
+    if output_dir is None:
+        output_dir = '.'
+    else:
+        os.makedirs(output_dir, exist_ok=True)
 
     # Begin master frame generation
     generate_master_calibration_frames(args.input_dir, args.output_dir, args.sigma_low, args.sigma_high)
