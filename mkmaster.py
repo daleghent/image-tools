@@ -2,23 +2,26 @@
 
 import os
 import sys
+import argparse
 import warnings
 import numpy as np
 from astropy.io import fits
 from astropy.nddata import CCDData
-from astropy.stats import sigma_clip
-from astropy.stats import sigma_clipped_stats
 from astropy.stats import mad_std
 from astropy.wcs import FITSFixedWarning
 from ccdproc import combine
 
+# Suppress non-critical WCS warnings from Astropy
 warnings.filterwarnings('ignore', category=FITSFixedWarning, append=True)
 
+# Accepted FITS extensions
+FITS_EXTENSIONS = ('.fit', '.fits', '.fts', '.fits.fz')
+
 def create_master_frame(files, output_filename):
-    """Combine BIAS or DARK FITS files into a master frame using median stacking."""
-    header = None
+    """Combine BIAS or DARK FITS files into a master frame using sigma-clipped average."""
     ccd_list = []
 
+    # Read all CCDData objects from the provided FITS files
     for file in files:
         print(f"Reading in {file}")
         try:
@@ -28,59 +31,74 @@ def create_master_frame(files, output_filename):
         except Exception as e:
             print(f"Error reading {file}: {e}")
 
-        if not ccd_list:
-            print("No valid FITS files could be read.")
-            return
+    # If no valid CCDs were read, skip processing
+    if not ccd_list:
+        print("No valid FITS files could be read. Skipping this group.")
+        return
 
-    print(f"{len(ccd_list)} files read.")
+    # Warn user if too few images are being combined
+    if len(ccd_list) < 3:
+        print("Warning: Less than 3 frames provided; master may be noisy.")
 
-    master_frame = combine(ccd_list, method='average', dtype=np.float32,
-            sigma_clip=True, sigma_clip_low_thresh=5, sigma_clip_high_thresh=5,
-            sigma_clip_func=np.ma.median, signma_clip_dev_func=mad_std)
+    print(f"{len(ccd_list)} files successfully read.")
 
+    # Perform sigma-clipped average stacking using MAD for dispersion
+    master_frame = combine(
+        ccd_list,
+        method='average',
+        dtype=np.float32,
+        sigma_clip=True,
+        sigma_clip_low_thresh=5,
+        sigma_clip_high_thresh=5,
+        sigma_clip_func=np.ma.median,
+        sigma_clip_dev_func=mad_std  # Corrected: typo fixed here
+    )
+
+    # Tag header to indicate it's a combined master frame
     master_frame.meta['combined'] = True
 
+    # Write result to disk, excluding mask and uncertainty HDUs
     master_frame.write(output_filename, overwrite=True, hdu_mask=None, hdu_uncertainty=None)
 
+    # Output statistics of the master frame
     print(f"Master frame created: {output_filename}")
     print(f"Mean: {np.mean(master_frame.data):.2f}, Min: {np.min(master_frame.data):.2f}, Max: {np.max(master_frame.data):.2f}")
 
 def organize_files_by_type(directory):
-    """Organize files in a directory by their IMAGETYP keyword."""
+    """Organize files in a directory by their IMAGETYP keyword and relevant metadata."""
     file_groups = {}
 
     for filename in os.listdir(directory):
-        # Process only FITS files with specific extensions
-        if filename.endswith(('.fit', '.fits', '.fts', '.fits.fz')):
-            filepath = os.path.join(directory, filename)
+        # Process only recognized FITS extensions, case-insensitively
+        if not filename.lower().endswith(FITS_EXTENSIONS):
+            continue
+
+        filepath = os.path.join(directory, filename)
+        try:
             with fits.open(filepath) as hdul:
                 header = hdul[0].header
 
-                # Get the image type from the header (e.g., BIAS, DARK, FLAT)
-                image_type = header.get('IMAGETYP')
+                # Get the image type from the header (e.g., BIAS, DARK)
+                image_type = header.get('IMAGETYP', header.get('FRAMETYP', 'UNKNOWN')).strip().upper()
 
-                if image_type is None:
-                    image_type = header.get('FRAMETYP', 'UNKNOWN')
-
-                image_type = str(image_type).strip().upper()
-
-                # Extract additional information based on image type
-                binning = f"{header.get('XBINNING', 1)}x{header.get('YBINNING', 1)}"  # Default binning is 1x1
+                # Extract binning and other metadata for grouping
+                binning = f"{header.get('XBINNING', 1)}x{header.get('YBINNING', 1)}"
                 set_temp = header.get('SET-TEMP', 0)
                 exposure_time = header.get('EXPTIME', 0)
 
+                # Determine grouping key by image type
                 if image_type == 'DARK':
                     key = (image_type, exposure_time, set_temp, binning)
                 elif image_type == 'BIAS':
                     key = (image_type, set_temp, binning)
                 else:
-                    continue  # Skip files with unknown or unsupported IMAGETYP
+                    continue  # Skip unsupported image types
 
                 # Group files by their key
-                if key not in file_groups:
-                    file_groups[key] = []
+                file_groups.setdefault(key, []).append(filepath)
 
-                file_groups[key].append(filepath)
+        except Exception as e:
+            print(f"Error processing {filename}: {e}")
 
     return file_groups
 
@@ -89,35 +107,44 @@ def generate_master_calibration_frames(input_directory, output_directory):
     # Ensure the output directory exists
     os.makedirs(output_directory, exist_ok=True)
 
-    # Organize files by their type and relevant metadata
+    # Organize files by image type and relevant grouping metadata
     file_groups = organize_files_by_type(input_directory)
 
     for key, files in file_groups.items():
         image_type = key[0]  # The first element of the key is the image type
+
         if image_type == 'BIAS':
-            set_temp, binning = key[1], key[2]
-            # Output filename for BIAS frames includes the binning
+            _, set_temp, binning = key
+            # Output filename for BIAS frames includes binning
             output_filename = os.path.join(output_directory, f"masterBIAS_{binning}.fits")
         elif image_type == 'DARK':
-            exposure_time, set_temp, binning = key[1], key[2], key[3]
-            # Output filename for DARK frames includes exposure time and binning
+            _, exposure_time, set_temp, binning = key
+            # Output filename for DARK frames includes exposure and binning
             output_filename = os.path.join(output_directory, f"masterDARK_{exposure_time}_{set_temp}_{binning}.fits")
         else:
-            continue  # Skip unsupported image types
+            continue  # Guard against unsupported types (should not happen)
 
-        # Create the master frame for the current group of files
+        # Create the master frame for this group
         create_master_frame(files, output_filename)
 
+def parse_arguments():
+    """Parse command-line arguments using argparse."""
+    parser = argparse.ArgumentParser(
+        description="Combine BIAS and DARK FITS files into master calibration frames."
+    )
+    parser.add_argument(
+        "input_dir",
+        help="Directory containing raw calibration FITS files (BIAS, DARK)."
+    )
+    parser.add_argument(
+        "output_dir",
+        help="Directory where the master calibration frames will be saved."
+    )
+    return parser.parse_args()
+
 if __name__ == "__main__":
-    # Ensure proper usage with two arguments
-    if len(sys.argv) != 3:
-        print("Usage: python script.py <input_dir> <output_dir>")
-        sys.exit(1)
+    # Parse CLI arguments
+    args = parse_arguments()
 
-    # Get input and output directories from command-line arguments
-    input_dir = sys.argv[1]
-    output_dir = sys.argv[2]
-
-    # Generate the master calibration frames
-    generate_master_calibration_frames(input_dir, output_dir)
-
+    # Begin master frame generation
+    generate_master_calibration_frames(args.input_dir, args.output_dir)
