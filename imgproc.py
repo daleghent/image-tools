@@ -190,6 +190,8 @@ def process_group_stack(group_files, output_dir, object_name):
     hdr = fits.getheader(group_files[0])
     hdr['DATE-AVG'] = midpoint.isot
     hdr['OBSERVER'] = OBSERVER
+
+    # Denote what the frame was calibrated with
     hdr['BIASCAL'] = all(bias_flags)
     hdr['DARKCAL'] = all(dark_flags)
     hdr['FLATCAL'] = all(flat_flags)
