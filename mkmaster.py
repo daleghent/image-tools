@@ -17,35 +17,44 @@ warnings.filterwarnings('ignore', category=FITSFixedWarning, append=True)
 # Accepted FITS extensions
 FITS_EXTENSIONS = ('.fit', '.fits', '.fts', '.fits.fz')
 
-default_sigma_high=5.0
-default_sigma_low=5.0
+default_sigma_high = 5.0
+default_sigma_low = 5.0
+default_min_frames = 15
 
-def create_master_frame(files, output_filename, sigma_low, sigma_high):
+def create_master_frame(files, output_filename, sigma_low, sigma_high, min_frames, bias_master=None, image_type=None):
     """Combine BIAS or DARK FITS files into a master frame using sigma-clipped average."""
     ccd_list = []
 
-    # Read all CCDData objects from the provided FITS files
     for file in files:
         print(f"Reading in {file}")
         try:
             ccd = CCDData.read(file, unit='adu')
-            print(f"  Mean: {np.mean(ccd.data):.2f}, Min: {np.min(ccd.data)}, Max: {np.max(ccd.data)}\n")
+
+            if bias_master is not None and image_type == 'DARK':
+                ccd = ccd.subtract(bias_master)
+
+            mean = np.mean(ccd.data)
+            std = np.std(ccd.data)
+            min_val = np.min(ccd.data)
+            max_val = np.max(ccd.data)
+            print(f"  Mean: {mean:.2f}, Min: {min_val}, Max: {max_val}, StdDev: {std:.2f}\n") 
+
             ccd_list.append(ccd)
         except Exception as e:
             print(f"Error reading {file}: {e}")
 
-    # If no valid CCDs were read, skip processing
-    if not ccd_list:
-        print("No valid FITS files could be read. Skipping this group.")
+    nframes = len(ccd_list)
+
+    if nframes < min_frames:
+        print(f"Skipped: Only {nframes} valid frames (minimum required: {min_frames})\n")
         return
 
-    # Warn user if too few images are being combined
-    if len(ccd_list) < 3:
+    if nframes < 3:
         print("Warning: Less than 3 frames provided; master may be noisy.")
 
-    print(f"{len(ccd_list)} files successfully read.")
+    print(f"{nframes} files successfully read.")
+    print(f"Using sigma clipping: low={sigma_low}, high={sigma_high}")
 
-    # Perform sigma-clipped average stacking using MAD for dispersion
     master_frame = combine(
         ccd_list,
         method='average',
@@ -57,22 +66,25 @@ def create_master_frame(files, output_filename, sigma_low, sigma_high):
         sigma_clip_dev_func=mad_std
     )
 
-    # Tag header to indicate it's a combined master frame
-    master_frame.meta['combined'] = True
+    master_frame.meta['COMBINED'] = True
+    master_frame.meta['NFRAMES'] = nframes
+    master_frame.meta['SIGMALO'] = sigma_low
+    master_frame.meta['SIGMAHI'] = sigma_high
 
-    # Write result to disk, excluding mask and uncertainty HDUs
     master_frame.write(output_filename, overwrite=True, hdu_mask=None, hdu_uncertainty=None)
 
-    # Output statistics of the master frame
+    mean = np.mean(master_frame.data)
+    min_val = np.min(master_frame.data)
+    max_val = np.max(master_frame.data)
+    std = np.std(master_frame.data)
     print(f"Master frame created: {output_filename}")
-    print(f"Mean: {np.mean(master_frame.data):.2f}, Min: {np.min(master_frame.data):.2f}, Max: {np.max(master_frame.data):.2f}")
+    print(f"Mean: {mean:.2f}, Min: {min_val:.2f}, Max: {max_val:.2f}, StdDev: {std:.2f}\n")
 
 def organize_files_by_type(directory):
     """Organize files in a directory by their IMAGETYP keyword and relevant metadata."""
     file_groups = {}
 
     for filename in os.listdir(directory):
-        # Process only recognized FITS extensions, case-insensitively
         if not filename.lower().endswith(FITS_EXTENSIONS):
             continue
 
@@ -80,24 +92,18 @@ def organize_files_by_type(directory):
         try:
             with fits.open(filepath) as hdul:
                 header = hdul[0].header
-
-                # Get the image type from the header (e.g., BIAS, DARK)
                 image_type = header.get('IMAGETYP', header.get('FRAMETYP', 'UNKNOWN')).strip().upper()
-
-                # Extract binning and other metadata for grouping
                 binning = f"{header.get('XBINNING', 1)}x{header.get('YBINNING', 1)}"
                 set_temp = header.get('SET-TEMP', 0)
                 exposure_time = header.get('EXPTIME', 0)
 
-                # Determine grouping key by image type
                 if image_type == 'DARK':
                     key = (image_type, exposure_time, set_temp, binning)
                 elif image_type == 'BIAS':
                     key = (image_type, set_temp, binning)
                 else:
-                    continue  # Skip unsupported image types
+                    continue
 
-                # Group files by their key
                 file_groups.setdefault(key, []).append(filepath)
 
         except Exception as e:
@@ -105,30 +111,56 @@ def organize_files_by_type(directory):
 
     return file_groups
 
-def generate_master_calibration_frames(input_directory, output_directory, sigma_low, sigma_high):
+def generate_master_calibration_frames(input_directory, output_directory, sigma_low, sigma_high, types, min_frames, bias_master_path):
     """Generate master calibration frames from FITS files in the specified directory."""
-    # Ensure the output directory exists
     os.makedirs(output_directory, exist_ok=True)
-
-    # Organize files by image type and relevant grouping metadata
     file_groups = organize_files_by_type(input_directory)
 
+    bias_master = None
+    if bias_master_path:
+        print(f"Loading master BIAS from {bias_master_path}")
+        try:
+            bias_master = CCDData.read(bias_master_path, unit='adu')
+        except Exception as e:
+            print(f"Error loading master BIAS: {e}")
+            sys.exit(1)
+
     for key, files in file_groups.items():
-        image_type = key[0]  # The first element of the key is the image type
+        image_type = key[0]
+
+        if image_type not in types:
+            continue
+
+        # Extract GAIN, OFFSET/BLKLEVEL, READOUTM from the first file
+        try:
+            with fits.open(files[0]) as hdul:
+                header = hdul[0].header
+                ccd_temp = header.get('CCD-TEMP', 0)
+                gain = header.get('GAIN', 'unk')
+                offset = header.get('OFFSET', header.get('BLKLEVEL', 'unk'))
+                readout_mode = header.get('READOUTM', None)
+        except Exception as e:
+            print(f"Error reading metadata from {files[0]}: {e}")
+            continue
+
+        temp_str = f"T{ccd_temp:.2f}"
+        gain_str = f"G{gain}"
+        offset_str = f"O{offset}"
+        suffix = f"{temp_str}_{gain_str}_{offset_str}"
+
+        # Sanitize readout mode for filename
+        if readout_mode is not None:
+            readout_mode = str(readout_mode).strip().replace(' ', '_').replace('/', '_').replace('\\', '_')
+            suffix = f"{suffix}_{readout_mode}"
 
         if image_type == 'BIAS':
             _, set_temp, binning = key
-            # Output filename for BIAS frames includes binning
-            output_filename = os.path.join(output_directory, f"masterBIAS_{binning}.fits")
+            output_filename = os.path.join(output_directory, f"masterBIAS_{binning}_{suffix}.fits")
+            create_master_frame(files, output_filename, sigma_low, sigma_high, min_frames, image_type='BIAS')
         elif image_type == 'DARK':
             _, exposure_time, set_temp, binning = key
-            # Output filename for DARK frames includes exposure and binning
-            output_filename = os.path.join(output_directory, f"masterDARK_{exposure_time}_{set_temp}_{binning}.fits")
-        else:
-            continue  # Guard against unsupported types (should not happen)
-
-        # Create the master frame for this group
-        create_master_frame(files, output_filename, sigma_low, sigma_high)
+            output_filename = os.path.join(output_directory, f"masterDARK_{exposure_time}_{binning}_{suffix}.fits")
+            create_master_frame(files, output_filename, sigma_low, sigma_high, min_frames, bias_master, image_type='DARK')
 
 def parse_arguments():
     """Parse command-line arguments using argparse."""
@@ -137,11 +169,11 @@ def parse_arguments():
     )
     parser.add_argument(
         "input_dir",
-        help="Directory containing raw calibration FITS files (BIAS, DARK)."
+        help="Directory containing FITS calibration subframes (BIAS, DARK)."
     )
     parser.add_argument(
-        "output_dir", nargs='?', default=None,
-        help="Directory where the master calibration frame will be saved."
+        "output_dir", nargs='?', default='.',
+        help="Directory where the master calibration frames will be saved (default: current directory)."
     )
     parser.add_argument(
         "--sigma-low", type=float, default=default_sigma_low,
@@ -151,16 +183,31 @@ def parse_arguments():
         "--sigma-high", type=float, default=default_sigma_high,
         help=f"Upper threshold for sigma clipping (default: {default_sigma_high})"
     )
+    parser.add_argument(
+        "--min-frames", type=int, default=default_min_frames,
+        help=f"Minimum number of valid frames required to create a master frame (default: {default_min_frames})"
+    )
+    parser.add_argument(
+        "--type", choices=['BIAS', 'DARK', 'ALL'], default='ALL',
+        help="Restrict processing to BIAS, DARK, or ALL types (default: ALL)"
+    )
+    parser.add_argument(
+        "-B", "--bias-master",
+        help="Optional master BIAS frame to subtract from DARK frames before combining"
+    )
     return parser.parse_args()
 
 if __name__ == "__main__":
-    # Parse CLI arguments
     args = parse_arguments()
 
-    if output_dir is None:
-        output_dir = '.'
-    else:
-        os.makedirs(output_dir, exist_ok=True)
+    types = ['BIAS', 'DARK'] if args.type == 'ALL' else [args.type]
 
-    # Begin master frame generation
-    generate_master_calibration_frames(args.input_dir, args.output_dir, args.sigma_low, args.sigma_high)
+    generate_master_calibration_frames(
+        input_directory=args.input_dir,
+        output_directory=args.output_dir,
+        sigma_low=args.sigma_low,
+        sigma_high=args.sigma_high,
+        types=types,
+        min_frames=args.min_frames,
+        bias_master_path=args.bias_master
+    )
