@@ -75,7 +75,7 @@ def calibrate_image(light_hdu):
         dark_applied = True
 
     # Flat
-    master_flat = get_frame_data(FLAT_DIR, ['FILTER'])
+    master_flat = get_frame_data(FLAT_DIR, ['FILTER', 'GAIN', 'OFFSET', 'READOUTM', 'INSTRUME'])
     if FLAT_DIR and master_flat is None:
         raise CalibrationError("No applicable flat calibration frame found.")
     if master_flat is not None:
