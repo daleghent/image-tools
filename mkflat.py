@@ -8,11 +8,13 @@ from pathlib import Path
 from ccdproc import ImageFileCollection, CCDData, combine, subtract_bias, subtract_dark
 from astropy import units as u
 from astropy.io import fits
-from astropy.stats import mad_std, sigma_clip
+from astropy.stats import mad_std
 from astropy.wcs import FITSFixedWarning
 
+# Constants
 default_sigma_high = 3.0
 default_sigma_low = 3.0
+FITS_EXTENSIONS = ('.fit', '.fits', '.fts', '.fits.fz')
 
 # Suppress WCS-related warnings from FITS headers
 warnings.simplefilter('ignore', category=FITSFixedWarning)
@@ -57,7 +59,9 @@ def main():
         dark_ccd = CCDData.read(dark_file, unit="adu")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    flat_collection = ImageFileCollection(input_dir, glob_include="*.fits")
+
+    flat_collection = ImageFileCollection(input_dir)
+    flat_files = [f for f in flat_collection.files if f.lower().endswith(FITS_EXTENSIONS)]
 
     calibrated_flats = []
     filter_name = None
@@ -67,7 +71,7 @@ def main():
     if file_limit > -1:
         print(f"Limiting stack to the first {file_limit} files")
 
-    for flat_path in flat_collection.files:
+    for flat_path in flat_files:
         if file_limit > -1 and i >= file_limit:
             break
 
@@ -75,44 +79,51 @@ def main():
         print(f"Reading flat file {flat_path}")
         flat_ccd = CCDData.read(input_dir / flat_path, unit="adu")
 
+        # Extract metadata for naming and bookkeeping
+        if filter_name is None:
+            filter_name = flat_ccd.header.get("FILTER")
+            if not filter_name:
+                print(f"Skipping {flat_path}: no FILTER keyword")
+                continue
+
+        if binning_level is None:
+            binX = flat_ccd.header.get("XBINNING")
+            binY = flat_ccd.header.get("YBINNING")
+            if not binX or not binY:
+                print(f"Skipping {flat_path}: missing XBINNING or YBINNING keyword")
+                continue
+            binning_level = f"{binX}x{binY}"
+
         # Apply bias subtraction if a bias frame was provided
         if bias_ccd is not None:
             flat_ccd = subtract_bias(flat_ccd, bias_ccd)
 
         # Apply dark subtraction if a dark frame was provided
         if dark_ccd is not None:
+            exposure_key = "EXPOSURE" if "EXPOSURE" in flat_ccd.header else "EXPTIME"
             try:
-                flat_ccd = subtract_dark(flat_ccd, dark_ccd, exposure_time="EXPOSURE", exposure_unit=u.second)
+                flat_ccd = subtract_dark(flat_ccd, dark_ccd, exposure_time=exposure_key, exposure_unit=u.second)
             except Exception as e:
                 print(f"WARNING: Dark subtraction failed on {flat_path}: {e}")
                 continue
 
         calibrated_flats.append(flat_ccd)
 
-        # Extract metadata for naming and bookkeeping
-        if filter_name is None:
-            filter_name = flat_ccd.header.get("FILTER")
-            if not filter_name:
-                raise KeyError(f"No FILTER keyword found in header of {flat_path}")
-
-        if binning_level is None:
-            binX = flat_ccd.header.get("XBINNING")
-            binY = flat_ccd.header.get("YBINNING")
-            if not binX or not binY:
-                raise KeyError(f"Missing XBINNING or YBINNING keyword in header of {flat_path}")
-            binning_level = f"{binX}x{binY}"
-
     # Release memory used by calibration frames
-    bias_ccd = None
-    dark_ccd = None
+    del bias_ccd
+    del dark_ccd
 
-    print(f"Combining calibrated flats using sigma clipping (low={sigma_low}, high={sigma_high})...")
+    if not calibrated_flats:
+        print("No valid flat frames were found after filtering. Exiting.")
+        return
 
-    # Combine the calibrated flat frames using a sigma-clipped average
+    print(f"Combining {len(calibrated_flats)} calibrated flats using sigma clipping (low={sigma_low}, high={sigma_high})...")
+
     master_flat = combine(
         calibrated_flats,
         method="average",
-        sigma_clip=sigma_clip,
+        scale=lambda a: 1 / np.median(a),
+        sigma_clip=True,
         sigma_clip_low_thresh=sigma_low,
         sigma_clip_high_thresh=sigma_high,
         sigma_clip_func=np.ma.median,
@@ -120,18 +131,12 @@ def main():
         dtype=np.float32
     )
 
-    # Normalize to mean = 1.0
-    print("Normalizing master flat to mean of 1.0")
-    master_flat.data /= np.mean(master_flat.data)
-
-    # Add metadata
     master_flat.header["IMAGETYP"] = ("masterFLAT", "Image type")
     master_flat.header["NORM"] = (True, "Flat field normalized to mean=1.0")
     master_flat.header['NFRAMES'] = (len(calibrated_flats), "Number of input subframes")
     master_flat.header['SIGMALO'] = (sigma_low, "Sigma clipping low")
     master_flat.header['SIGMAHI'] = (sigma_high, "Sigma clipping high")
 
-    # Write output
     master_flat_name = f"masterFLAT_{filter_name}_{binning_level}.fits"
     master_flat_path = output_dir / master_flat_name
 
