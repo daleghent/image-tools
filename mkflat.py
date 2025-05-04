@@ -81,10 +81,7 @@ def main():
 
         # Extract metadata for naming and bookkeeping
         if filter_name is None:
-            filter_name = flat_ccd.header.get("FILTER")
-            if not filter_name:
-                print(f"Skipping {flat_path}: no FILTER keyword")
-                continue
+            filter_name = flat_ccd.header.get("FILTER", None)
 
         if binning_level is None:
             binX = flat_ccd.header.get("XBINNING")
@@ -117,7 +114,9 @@ def main():
         print("No valid flat frames were found after filtering. Exiting.")
         return
 
-    print(f"Combining {len(calibrated_flats)} calibrated flats using sigma clipping (low={sigma_low}, high={sigma_high})...")
+    flat_count = len(calibrated_flats)
+
+    print(f"Combining {flat_count} calibrated flats using sigma clipping (low={sigma_low}, high={sigma_high})...")
 
     master_flat = combine(
         calibrated_flats,
@@ -131,9 +130,15 @@ def main():
         dtype=np.float32
     )
 
+    del calibrated_flats
+
+    if filter_name is None:
+        filter_name = "NOFILTER"
+        master_flat.header["FILTER"] = (filter_name, "Name of filter")
+
     master_flat.header["IMAGETYP"] = ("masterFLAT", "Image type")
     master_flat.header["NORM"] = (True, "Flat field normalized to mean=1.0")
-    master_flat.header['NFRAMES'] = (len(calibrated_flats), "Number of input subframes")
+    master_flat.header['NFRAMES'] = (flat_count, "Number of input subframes")
     master_flat.header['SIGMALO'] = (sigma_low, "Sigma clipping low")
     master_flat.header['SIGMAHI'] = (sigma_high, "Sigma clipping high")
 
