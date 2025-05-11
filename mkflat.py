@@ -26,6 +26,7 @@ def main():
     parser.add_argument("-l", "--limit", type=int, help="Limit files used to this number (optional)")
     parser.add_argument("-D", "--dark_file", help="Path to the dark calibration file (optional).")
     parser.add_argument("-B", "--bias_file", help="Path to the bias calibration file (optional).")
+    parser.add_argument("-s", "--scale", action="store_true", help="Enable scaling of each flat by its median before combination.")
     parser.add_argument("--sigma-low", type=float, default=default_sigma_low, help=f"Low threshold for sigma clipping (default: {default_sigma_low})")
     parser.add_argument("--sigma-high", type=float, default=default_sigma_high, help=f"High threshold for sigma clipping (default: {default_sigma_high})")
 
@@ -38,6 +39,7 @@ def main():
     bias_file = Path(args.bias_file) if args.bias_file else None
     sigma_low = args.sigma_low
     sigma_high = args.sigma_high
+    enable_scaling = args.scale
 
     if not input_dir.is_dir():
         raise ValueError(f"Input directory '{input_dir}' does not exist.")
@@ -126,11 +128,13 @@ def main():
     flat_count = len(calibrated_flats)
 
     print(f"Combining {flat_count} calibrated flats using sigma clipping (low={sigma_low}, high={sigma_high})...")
+    if enable_scaling:
+        print("Scaling enabled: each flat will be normalized by its median before combination.")
 
     master_flat = combine(
         calibrated_flats,
         method="average",
-        scale=lambda a: 1 / np.median(a),
+        scale=(lambda a: 1 / np.median(a)) if enable_scaling else None,
         sigma_clip=True,
         sigma_clip_low_thresh=sigma_low,
         sigma_clip_high_thresh=sigma_high,
@@ -152,9 +156,10 @@ def main():
 
     master_flat.header["IMAGETYP"] = ("masterFLAT", "Image type")
     master_flat.header["NORM"] = (True, "Flat field normalized to mean=1.0")
-    master_flat.header['NFRAMES'] = (flat_count, "Number of input subframes")
-    master_flat.header['SIGMALO'] = (sigma_low, "Sigma clipping low")
-    master_flat.header['SIGMAHI'] = (sigma_high, "Sigma clipping high")
+    master_flat.header["NFRAMES"] = (flat_count, "Number of input subframes")
+    master_flat.header["SIGMALO"] = (sigma_low, "Sigma clipping low")
+    master_flat.header["SIGMAHI"] = (sigma_high, "Sigma clipping high")
+    master_flat.header["SCALEMED"] = (enable_scaling, "Input images scaled by median before combination")
 
     master_flat_name = f"masterFLAT_{filter_name}_{binning_level}.fits"
     master_flat_path = output_dir / master_flat_name
