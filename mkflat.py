@@ -77,25 +77,34 @@ def main():
 
         i += 1
         print(f"Reading flat file {flat_path}")
-        flat_ccd = CCDData.read(input_dir / flat_path, unit="adu")
+        try:
+            flat_ccd = CCDData.read(input_dir / flat_path, unit="adu")
+        except Exception as e:
+            print(f"ERROR: Could not read {flat_path}: {e}")
+            continue
 
-        # Extract metadata for naming and bookkeeping
-        if filter_name is None:
-            filter_name = flat_ccd.header.get("FILTER", None)
+        # Extract metadata for naming and consistency checking
+        try:
+            binX = int(flat_ccd.header["XBINNING"])
+            binY = int(flat_ccd.header["YBINNING"])
+        except KeyError:
+            print(f"Skipping {flat_path}: missing XBINNING or YBINNING keyword")
+            continue
 
         if binning_level is None:
-            binX = flat_ccd.header.get("XBINNING")
-            binY = flat_ccd.header.get("YBINNING")
-            if not binX or not binY:
-                print(f"Skipping {flat_path}: missing XBINNING or YBINNING keyword")
-                continue
             binning_level = f"{binX}x{binY}"
 
-        # Apply bias subtraction if a bias frame was provided
+        this_filter = flat_ccd.header.get("FILTER", None)
+        if filter_name is None:
+            filter_name = this_filter
+        elif this_filter != filter_name:
+            print(f"WARNING: {flat_path} has different FILTER ({this_filter}) than others ({filter_name})")
+
+        # Apply bias subtraction
         if bias_ccd is not None:
             flat_ccd = subtract_bias(flat_ccd, bias_ccd)
 
-        # Apply dark subtraction if a dark frame was provided
+        # Apply dark subtraction
         if dark_ccd is not None:
             exposure_key = "EXPOSURE" if "EXPOSURE" in flat_ccd.header else "EXPTIME"
             try:
