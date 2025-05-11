@@ -14,6 +14,7 @@ from astropy.wcs import FITSFixedWarning
 # Constants
 default_sigma_high = 3.0
 default_sigma_low = 3.0
+default_mem_limit_gb = 42.0
 FITS_EXTENSIONS = ('.fit', '.fits', '.fts', '.fits.fz')
 
 # Suppress WCS-related warnings from FITS headers
@@ -26,6 +27,7 @@ def main():
     parser.add_argument("-l", "--limit", type=int, help="Limit files used to this number (optional)")
     parser.add_argument("-D", "--dark_file", help="Path to the dark calibration file (optional).")
     parser.add_argument("-B", "--bias_file", help="Path to the bias calibration file (optional).")
+    parser.add_argument("-m", "--mem-limit", type=float, default=default_mem_limit_gb, help=f"Memory limit for combination in GB (default: {default_mem_limit_gb} GB)")
     parser.add_argument("-s", "--scale", action="store_true", help="Enable scaling of each flat by its median before combination.")
     parser.add_argument("--sigma-low", type=float, default=default_sigma_low, help=f"Low threshold for sigma clipping (default: {default_sigma_low})")
     parser.add_argument("--sigma-high", type=float, default=default_sigma_high, help=f"High threshold for sigma clipping (default: {default_sigma_high})")
@@ -40,6 +42,7 @@ def main():
     sigma_low = args.sigma_low
     sigma_high = args.sigma_high
     enable_scaling = args.scale
+    mem_limit_bytes = args.mem_limit * 1e9  # Convert GB to bytes
 
     if not input_dir.is_dir():
         raise ValueError(f"Input directory '{input_dir}' does not exist.")
@@ -128,6 +131,7 @@ def main():
     flat_count = len(calibrated_flats)
 
     print(f"Combining {flat_count} calibrated flats using sigma clipping (low={sigma_low}, high={sigma_high})...")
+
     if enable_scaling:
         print("Scaling enabled: each flat will be normalized by its median before combination.")
 
@@ -141,7 +145,8 @@ def main():
         sigma_clip_high_thresh=sigma_high,
         sigma_clip_func=np.ma.median,
         sigma_clip_dev_func=mad_std,
-        dtype=np.float32
+        dtype=np.float32,
+        mem_limit=mem_limit_bytes
     )
 
     # Release memory used by calibrated flat list
