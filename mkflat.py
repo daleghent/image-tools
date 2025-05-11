@@ -141,6 +141,11 @@ def main():
 
     del calibrated_flats
 
+    # Normalize flat to mean = 1.0
+    mean_val = np.mean(master_flat.data)
+    if mean_val != 0:
+        master_flat.data /= mean_val
+
     if filter_name is None:
         filter_name = "NOFILTER"
         master_flat.header["FILTER"] = (filter_name, "Name of filter")
