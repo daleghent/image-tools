@@ -61,7 +61,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     flat_collection = ImageFileCollection(input_dir)
-    flat_files = [f for f in flat_collection.files if f.lower().endswith(FITS_EXTENSIONS)]
+    flat_files = sorted([f for f in flat_collection.files if f.lower().endswith(FITS_EXTENSIONS)])
 
     calibrated_flats = []
     filter_name = None
