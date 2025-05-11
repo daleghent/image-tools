@@ -85,7 +85,7 @@ def main():
             print(f"ERROR: Could not read {flat_path}: {e}")
             continue
 
-        # Extract metadata for naming and consistency checking
+        # Extract metadata for naming and bookkeeping
         try:
             binX = int(flat_ccd.header["XBINNING"])
             binY = int(flat_ccd.header["YBINNING"])
@@ -102,11 +102,11 @@ def main():
         elif this_filter != filter_name:
             print(f"WARNING: {flat_path} has different FILTER ({this_filter}) than others ({filter_name})")
 
-        # Apply bias subtraction
+        # Apply bias subtraction if a bias frame was provided
         if bias_ccd is not None:
             flat_ccd = subtract_bias(flat_ccd, bias_ccd)
 
-        # Apply dark subtraction
+        # Apply dark subtraction if a dark frame was provided
         if dark_ccd is not None:
             exposure_key = "EXPOSURE" if "EXPOSURE" in flat_ccd.header else "EXPTIME"
             try:
@@ -131,6 +131,7 @@ def main():
     if enable_scaling:
         print("Scaling enabled: each flat will be normalized by its median before combination.")
 
+    # Combine the calibrated flats using sigma-clipped average
     master_flat = combine(
         calibrated_flats,
         method="average",
@@ -143,17 +144,20 @@ def main():
         dtype=np.float32
     )
 
+    # Release memory used by calibrated flat list
     del calibrated_flats
 
-    # Normalize flat to mean = 1.0
+    # Normalize the result to mean = 1.0
     mean_val = np.mean(master_flat.data)
     if mean_val != 0:
         master_flat.data /= mean_val
 
+    # Fallback in case no FILTER keyword was present in any image
     if filter_name is None:
         filter_name = "NOFILTER"
         master_flat.header["FILTER"] = (filter_name, "Name of filter")
 
+    # Add header keywords to describe this master flat
     master_flat.header["IMAGETYP"] = ("masterFLAT", "Image type")
     master_flat.header["NORM"] = (True, "Flat field normalized to mean=1.0")
     master_flat.header["NFRAMES"] = (flat_count, "Number of input subframes")
@@ -161,9 +165,11 @@ def main():
     master_flat.header["SIGMAHI"] = (sigma_high, "Sigma clipping high")
     master_flat.header["SCALEMED"] = (enable_scaling, "Input images scaled by median before combination")
 
+    # Construct output filename
     master_flat_name = f"masterFLAT_{filter_name}_{binning_level}.fits"
     master_flat_path = output_dir / master_flat_name
 
+    # Save to disk
     master_flat.write(master_flat_path, overwrite=True, hdu_mask=None, hdu_uncertainty=None)
     print(f"Master flat saved to {master_flat_path}")
 
