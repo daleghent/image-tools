@@ -134,7 +134,7 @@ def process_single_image(file_path, output_dir, object_name):
             return
     ts_iso = ts.to_value('iso', subfmt='date')
     header['FILTER'] = header.get('FILTER', 'UNKNOWN')
-    output_fname = f"{object_name}_{OBSERVER}_{header['FILTER']}_{ts_iso.replace('-', '')}_{ts.jd:.8f}.fits"
+    output_fname = f"{object_name}_{OBSERVER}_{header['FILTER']}_{ts_iso.replace('-', '')}_{ts.mjd:.8f}.fits"
     out_path = os.path.join(output_dir, output_fname)
 
     print(f"Writing single file: {output_fname}")
@@ -198,8 +198,8 @@ def process_group_stack(group_files, output_dir, object_name):
     hdr['FILTER'] = FILTER_NAME if FILTER_NAME else hdr.get('FILTER', 'UNKNOWN')
 
     mid_iso = midpoint.to_value('iso', subfmt='date')
-    mid_jd = midpoint.jd
-    out_fname = f"{object_name}_{OBSERVER}_{hdr['FILTER']}_{mid_iso.replace('-', '')}_{mid_jd:.3f}.fits"
+    mid_mjd = midpoint.mjd
+    out_fname = f"{object_name}_{OBSERVER}_{hdr['FILTER']}_{mid_iso.replace('-', '')}_{mid_mjd:.8f}.fits"
     out_path = os.path.join(output_dir, out_fname)
 
     print(f"Writing stacked file: {out_fname}")
