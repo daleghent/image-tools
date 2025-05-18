@@ -94,12 +94,13 @@ def bin_image(data):
     """Bin image data by the global BIN_LEVEL."""
     if BIN_LEVEL <= 1:
         return data
-    ny, nx = data.shape
-    by = ny // BIN_LEVEL
-    bx = nx // BIN_LEVEL
-    data = data[:by * BIN_LEVEL, :bx * BIN_LEVEL]
-    reshaped = data.reshape(by, BIN_LEVEL, bx, BIN_LEVEL)
-    return reshaped.mean(axis=(1, 3))
+
+    shape_y, shape_x = data.shape
+    new_shape = (
+        shape_y // bin_factor_y, bin_factor_y,
+        shape_x // bin_factor_x, bin_factor_x
+    )
+    return data[:new_shape[0]*bin_factor_y, :new_shape[2]*bin_factor_x].reshape(new_shape).mean(axis=(1, 3))
 
 
 def process_single_image(file_path, output_dir, object_name):
